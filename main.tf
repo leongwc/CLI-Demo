@@ -112,6 +112,11 @@ resource "aws_instance" "application1" {
   tags = {
     Name = "App Server 1"
   }
+
+  metadata_options {
+    http_endpoint = "disabled"
+    http_tokens   = "required"
+  }
 }
 
 resource "aws_instance" "application2" {
