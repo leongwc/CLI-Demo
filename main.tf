@@ -12,7 +12,7 @@ resource "aws_subnet" "web_subnet1" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "ap-southeast-1a"
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
 
   tags = {
     Name = "Web Subnet 1"
@@ -23,7 +23,7 @@ resource "aws_subnet" "web_subnet2" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.2.0/24"
   availability_zone       = "ap-southeast-1b"
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
 
   tags = {
     Name = "Web Subnet 2"
@@ -86,6 +86,12 @@ resource "aws_instance" "webserver1" {
   tags = {
     Name = "Web Server 1"
   }
+
+  metadata_options {
+    http_endpoint = "disabled"
+    http_tokens   = "required"
+  }
+  monitoring = true
 }
 
 resource "aws_instance" "webserver2" {
@@ -100,6 +106,12 @@ resource "aws_instance" "webserver2" {
   tags = {
     Name = "Web Server 2"
   }
+
+  metadata_options {
+    http_endpoint = "disabled"
+    http_tokens   = "required"
+  }
+  monitoring = true
 }
 
 resource "aws_instance" "application1" {
@@ -112,6 +124,13 @@ resource "aws_instance" "application1" {
   tags = {
     Name = "App Server 1"
   }
+
+  metadata_options {
+    http_endpoint = "disabled"
+    http_tokens   = "required"
+  }
+  monitoring             = true
+  vpc_security_group_ids = ["<security_group_id>"]
 }
 
 resource "aws_instance" "application2" {
@@ -124,6 +143,13 @@ resource "aws_instance" "application2" {
   tags = {
     Name = "App Server 2"
   }
+
+  metadata_options {
+    http_endpoint = "disabled"
+    http_tokens   = "required"
+  }
+  monitoring             = true
+  vpc_security_group_ids = ["<security_group_id>"]
 }
 
 # Create Internet Gateway
@@ -172,7 +198,7 @@ resource "aws_security_group" "web_sg" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["<cidr>"]
   }
 
   ingress {
@@ -180,7 +206,7 @@ resource "aws_security_group" "web_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["<cidr>"]
   }
 
   egress {
@@ -253,12 +279,17 @@ resource "aws_lb" "external_elb" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.web_sg.id]
   subnets            = [aws_subnet.web_subnet1.id, aws_subnet.web_subnet2.id]
+
+  access_logs {
+    bucket  = "<s3_bucket_name>"
+    enabled = true
+  }
 }
 
 resource "aws_lb_target_group" "external_elb_tg" {
   name     = "ALB-Target"
   port     = 80
-  protocol = "HTTP"
+  protocol = "HTTPS"
   vpc_id   = aws_vpc.main.id
 }
 
@@ -277,7 +308,7 @@ resource "aws_lb_target_group_attachment" "external_elb2" {
 resource "aws_lb_listener" "external_elb" {
   load_balancer_arn = aws_lb.external_elb.arn
   port              = "80"
-  protocol          = "HTTP"
+  protocol          = "HTTPS"
 
   default_action {
     type             = "forward"
@@ -286,16 +317,18 @@ resource "aws_lb_listener" "external_elb" {
 }
 
 resource "aws_db_instance" "default" {
-  allocated_storage      = 10
-  db_subnet_group_name   = aws_db_subnet_group.default.id
-  engine                 = "mysql"
-  instance_class         = "db.t2.micro"
-  multi_az               = true
-  db_name                = "mydb"
-  username               = "dbadmin"
-  password               = "verysecret"
-  skip_final_snapshot    = true
-  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  allocated_storage                   = 200
+  db_subnet_group_name                = aws_db_subnet_group.default.id
+  engine                              = "mysql"
+  instance_class                      = "db.t2.micro"
+  multi_az                            = true
+  db_name                             = "mydb"
+  username                            = "dbadmin"
+  password                            = "verysecret"
+  skip_final_snapshot                 = true
+  vpc_security_group_ids              = [aws_security_group.db_sg.id]
+  iam_database_authentication_enabled = true
+  backup_retention_period             = 30
 }
 
 resource "aws_db_subnet_group" "default" {
@@ -305,4 +338,58 @@ resource "aws_db_subnet_group" "default" {
   tags = {
     Name = "DB subnet group"
   }
+}
+
+resource "aws_flow_log" "main" {
+  vpc_id          = "${aws_vpc.main.id}"
+  iam_role_arn    = "<iam_role_arn>"
+  log_destination = "${aws_s3_bucket.main.arn}"
+  traffic_type    = "ALL"
+
+  tags = {
+    GeneratedBy      = "Accurics"
+    ParentResourceId = "aws_vpc.main"
+  }
+}
+resource "aws_s3_bucket" "main" {
+  bucket        = "main_flow_log_s3_bucket"
+  acl           = "private"
+  force_destroy = true
+
+  versioning {
+    enabled    = true
+    mfa_delete = true
+  }
+
+  server_side_encryption_configuration {
+    rule {
+      apply_server_side_encryption_by_default {
+        sse_algorithm = "AES256"
+      }
+    }
+  }
+}
+resource "aws_s3_bucket_policy" "main" {
+  bucket = "${aws_s3_bucket.main.id}"
+
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "main-restrict-access-to-users-or-roles",
+      "Effect": "Allow",
+      "Principal": [
+        {
+          "AWS": [
+            <principal_arn>
+          ]
+        }
+      ],
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::${aws_s3_bucket.main.id}/*"
+    }
+  ]
+}
+POLICY
 }
